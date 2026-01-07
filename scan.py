@@ -10,14 +10,15 @@ def extract_domains(scanner):
     """
     found_domains = set()
     # Broad domain regex: finds things like 'sub.example.com'
-    domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
+    domain_pattern = r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b'
 
     for host in scanner.all_hosts():
         # 1. Check Nmap's internal hostnames list
         for hostname_data in scanner[host].hostnames():
             name = hostname_data.get('name')
-            if name and not name.endswith('.in-addr.arpa'): # Ignore reverse DNS noise
-                found_domains.add(name)
+            # Ignore reverse DNS noise and empty names
+            if name and not name.endswith('.in-addr.arpa'):
+                found_domains.add(name.lower())
 
         # 2. Check all script outputs (Certificates, banners, etc.)
         for proto in scanner[host].all_protocols():
@@ -25,17 +26,16 @@ def extract_domains(scanner):
                 port_data = scanner[host][proto][port]
                 if 'script' in port_data:
                     for output in port_data['script'].values():
-                        # Extract matches from the script output text
                         matches = re.findall(domain_pattern, output)
                         for m in matches:
-                            # Filter out false positives like nmap.org or IP strings
+                            # Filter out false positives
                             if not m.lower().endswith('nmap.org') and not re.match(r'^\d+\.', m):
                                 found_domains.add(m.lower())
     
     return found_domains
 
 def print_results(scanner):
-    # (Your existing print logic stays here)
+    """Helper function to print results in the desired format"""
     for host in scanner.all_hosts():
         print(f"\nHost: {host}")
         for proto in scanner[host].all_protocols():
@@ -65,15 +65,24 @@ def nmap_scan(target, fast_mode=False):
         print_results(scanner)
 
         if fast_mode:
-            open_ports = [str(p) for proto in scanner[target].all_protocols() for p in scanner[target][proto]]
+            open_ports = []
+            # Loop through all found hosts to get ports, avoiding KeyError on hostname
+            for host in scanner.all_hosts():
+                for proto in scanner[host].all_protocols():
+                    for p in scanner[host][proto]:
+                        if scanner[host][proto][p]['state'] == 'open':
+                            open_ports.append(str(p))
+            
             if open_ports:
                 port_list = ",".join(open_ports)
                 print(f"\n{Fore.CYAN}[*] Running intensive scan on: {port_list}")
+                # Re-scanning the original target but specifying the discovered ports
                 scanner.scan(target, ports=port_list, arguments="-sV -sC -T4")
                 print_results(scanner)
 
-        # FINAL EXTRACTION: Pull domains for the next stage
+        # Extract domains using the scanner object
         discovered_domains = extract_domains(scanner)
+        
         if discovered_domains:
             print(f"\n{Fore.GREEN}[+] Discovered FQDNs for enumeration: {', '.join(discovered_domains)}")
         
